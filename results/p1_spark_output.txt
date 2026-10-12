@@ -1,0 +1,43 @@
+### 1. Какие таблицы Spark видит в Bronze
++---------+------------+-----------+
+|namespace|tableName   |isTemporary|
++---------+------------+-----------+
+|lakehouse|raw_part    |false      |
+|lakehouse|raw_partsupp|false      |
+|lakehouse|raw_supplier|false      |
++---------+------------+-----------+
+
+### 2. Сколько строк в каждой таблице
+  raw_part: 2,000,000
+  raw_partsupp: 8,000,000
+  raw_supplier: 100,000
+
+### 3. Схема raw_supplier (служебные поля loaded_at и source_system на месте)
+root
+ |-- suppkey: long (nullable = true)
+ |-- name: string (nullable = true)
+ |-- address: string (nullable = true)
+ |-- nationkey: long (nullable = true)
+ |-- phone: string (nullable = true)
+ |-- acctbal: double (nullable = true)
+ |-- comment: string (nullable = true)
+ |-- loaded_at: timestamp (nullable = true)
+ |-- source_system: string (nullable = true)
+
+### 4. Пример строк
++-------+------------------+----------------------------------------+----------------------+-------------+
+|suppkey|name              |comment_start                           |loaded_at             |source_system|
++-------+------------------+----------------------------------------+----------------------+-------------+
+|1      |Supplier#000000001|each slyly above the careful            |2026-10-03 10:00:09.06|tpch.sf10    |
+|2      |Supplier#000000002| slyly bold instructions. idle dependen |2026-10-03 10:00:09.06|tpch.sf10    |
+|3      |Supplier#000000003|blithely silent requests after the expre|2026-10-03 10:00:09.06|tpch.sf10    |
++-------+------------------+----------------------------------------+----------------------+-------------+
+
+### 5. Запрос варианта 4 (Q16) в Spark прямо по Bronze
+  строк в ответе: 27840, время: 10.17 с
+  сумма supplier_cnt: 1186339
+  Brand#44   STANDARD PLATED TIN            9 -> 120
+  Brand#12   STANDARD POLISHED COPPER      14 -> 100
+  Brand#11   LARGE BRUSHED STEEL           36 -> 96
+  Brand#23   PROMO BURNISHED STEEL         14 -> 96
+  Brand#34   MEDIUM BRUSHED STEEL          23 -> 96

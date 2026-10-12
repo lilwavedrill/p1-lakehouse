@@ -1,0 +1,64 @@
+### 0. Исходная схема и данные
+    Column     |  Type   | Extra | Comment 
+---------------+---------+-------+---------
+ suppkey       | bigint  |       |         
+ name          | varchar |       |         
+ nationkey     | bigint  |       |         
+ has_complaint | boolean |       |         
+(4 rows)
+ suppkey |        name        | has_complaint 
+---------+--------------------+---------------
+       1 | Supplier#000000001 | false         
+       2 | Supplier#000000002 | false         
+       3 | Supplier#000000003 | false         
+(3 rows)
+### 1. ADD COLUMN - добавили колонку region
+ suppkey |        name        | region 
+---------+--------------------+--------
+       1 | Supplier#000000001 | NULL   
+       2 | Supplier#000000002 | NULL   
+       3 | Supplier#000000003 | NULL   
+(3 rows)
+-> у старых строк region = NULL, файлы не переписывались
+ files_now 
+-----------
+         1 
+(1 row)
+### 2. RENAME COLUMN - name -> supplier_name
+ suppkey |   supplier_name    
+---------+--------------------
+       1 | Supplier#000000001 
+       2 | Supplier#000000002 
+       3 | Supplier#000000003 
+(3 rows)
+-> старые файлы читаются под новым именем: Iceberg хранит колонки по id, а не по имени
+### 3. Снапшоты до аварии
+     snapshot_id     | operation |        committed_at         
+---------------------+-----------+-----------------------------
+ 4256117099757477496 | append    | 2026-10-03 09:56:12.862 UTC 
+(1 row)
+запомнили хороший снапшот: 4256117099757477496
+ rows_before 
+-------------
+      100000 
+(1 row)
+### 4. Авария: случайно удалили всех поставщиков без жалоб
+ rows_after_delete 
+-------------------
+                56 
+(1 row)
+### 5. Time travel - смотрим таблицу на момент до удаления
+ rows_in_old_snapshot 
+----------------------
+               100000 
+(1 row)
+### 6. Восстановление: откат таблицы на хороший снапшот
+ rows_after_rollback 
+---------------------
+              100000 
+(1 row)
+     snapshot_id     | operation |        committed_at         
+---------------------+-----------+-----------------------------
+ 4256117099757477496 | append    | 2026-10-03 09:56:12.862 UTC 
+ 1965609605866228007 | delete    | 2026-10-03 12:45:26.035 UTC 
+(2 rows)
