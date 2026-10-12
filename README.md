@@ -1,37 +1,56 @@
-# Практическая 1 - локальный Lakehouse, медальон и бенчмарк кодеков
+# Практическая 1: lakehouse под запрос Q16
 
-Кривонос Никита Николаевич, БИВТ-24-АЭ-1. Вариант 4 - TPC-H Q16 "Parts/Supplier Relationship", масштаб sf10.
+Кривонос Никита Николаевич, БИВТ-24-АЭ-1.
+Вариант 4 - TPC-H Q16 "Parts/Supplier Relationship", масштаб sf10.
 
-Стек: MinIO -> Lakekeeper (Iceberg REST) -> Trino, плюс Spark для п.6.2. Все в Docker (у меня через colima на маке, 8 ГБ).
+Полный отчет по форме - [отчет.md](отчет.md). Здесь коротко: что получилось, как я к этому шел и как повторить.
 
-Сам отчет - в [отчет.md](отчет.md).
+## Итог
 
-## Что где лежит
+- Gold совпадает с оригинальным Q16, посчитанным по сырым данным: 27 840 строк, сумма supplier_cnt 1 186 339, `EXCEPT` в обе стороны пустой. Вывод сверки - `results/p1_gold_vs_q16.txt`.
+- По весу: bronze 290 МБ -> silver 26 МБ -> gold 0.08 МБ. Запрос к gold около 0.05 с.
+- По кодекам на моих данных: меньше всего места у GZIP, быстрее всего читается ZSTD, быстрее всего пишется SNAPPY. Без сжатия bronze в 4.3 раза больше и ни в чем не выигрывает. Медианы из 3 прогонов - `results/p1_bronze_codecs_sf10.csv`.
 
-| | |
-|---|---|
-| `stand/up.sh` | поднять весь стек одной командой |
-| `stand/catalog/` | каталоги Trino: bronze, silver, gold, bench, tpch |
-| `stand/conf/` | jvm.config и config.properties для Trino (урезал память) |
-| `sql/medallion.sql` | все слои bronze -> silver -> gold (в silver чистка, нормализация type, флаг жалоб) + проверка gold против оригинального Q16 |
-| `scripts/p1_medallion.py` | то же, что medallion.sql, но еще собирает строки/МБ/время для отчета |
-| `scripts/p1_bench_bronze.py` | п.5: Bronze на GZIP и на ZSTD, размер и время Q16 |
-| `scripts/bench8.py` | бенчмарк 8 вариантов формат x кодек на lineitem sf10 |
-| `scripts/p1_evolution.sh` | п.6.1: schema evolution и откат из снапшота |
-| `scripts/p1_spark_bronze.py` | п.6.2: Spark читает Bronze через Lakekeeper |
-| `results/` | что получилось у меня |
+## Как шла работа
 
-## Как запустить
+Делал на своем маке (8 ГБ), docker через colima.
+
+- **01.10** - поднял стенд MinIO -> Lakekeeper -> Trino. Сразу три проблемы: образ MinIO с quay.io отдает 401, Lakekeeper не мигрировал, потому что контейнеры попадали в мой старый postgres 14 на 5432, а Trino убивало по памяти. Все обходы - в `stand/up.sh`.
+- **02.10** - первые пробные замеры на lineitem.
+- **03.10** - бенчмарк 8 вариантов формат x кодек на lineitem sf10 (`results/results_bench8_sf10.csv`). Собрал медальон под Q16, проверил эволюцию схемы и откат из снапшота (`results/p1_evolution_output.txt`), подключил Spark к bronze (`results/p1_spark_output.txt`). В выводе эволюции и Spark видны даты прогонов - 2026-10-03.
+- **04.10** - первая версия отчета.
+- **11.10** - добавил в silver нормализацию: type разложил на класс / обработку / материал. Сделал `medallion.sql` повторно запускаемым и прогнал его целиком как файл.
+- **12.10** - переделал замер кодеков на bronze: было по одному прогону и только GZIP с ZSTD, стало 4 кодека по 3 прогона. Одиночные замеры у меня гуляли больше чем в полтора раза (у GZIP от 4.7 до 7.7 с).
+
+## Как повторить
+
+Нужен docker. На маке с Docker Desktop или colima `host.docker.internal` работает сам.
 
 ```bash
-cd stand && ./up.sh
-docker exec -i trino trino < ../sql/medallion.sql
+cd stand && ./up.sh && cd ..
 ```
 
-`medallion.sql` можно запускать повторно, таблицы пересоздаются.
+Поднимает MinIO (консоль http://localhost:9001, minioadmin / minioadmin), Postgres на 5433, Lakekeeper на 8181 и Trino на 8080. Плюс бакеты bench / bronze / silver / gold и под каждый warehouse в Lakekeeper.
 
-Скрипты для Trino (`p1_medallion.py`, `p1_bench_bronze.py`, `bench8.py`) - обычный python3, без библиотек, ходят в Trino по HTTP:
-`python3 scripts/p1_medallion.py sf10`.
+```bash
+docker exec -i trino trino < sql/medallion.sql
+```
 
-`p1_spark_bronze.py` нужен pyspark, поэтому он запускается внутри контейнера со Spark - команда в отчете, п.6.2.
-Trino на время запуска Spark лучше остановить, на 8 ГБ они вдвоем не помещаются.
+Строит все три слоя и в конце сам печатает сверку с оригинальным Q16. Можно запускать сколько угодно раз, таблицы пересоздаются.
+
+Дальше по пунктам отчета:
+
+- п.4, цифры по слоям: `python3 scripts/p1_medallion.py sf10`
+- п.5, кодеки на bronze (около 15 минут): `python3 scripts/p1_bench_bronze.py sf10`
+- бенчмарк на lineitem, 8 вариантов (долго, у меня около получаса): `python3 scripts/bench8.py sf10`
+- п.6.1, эволюция схемы и откат: `bash scripts/p1_evolution.sh`
+- п.6.2, Spark - команда в отчете. Перед ней `docker stop trino`, на 8 ГБ они вдвоем не помещаются
+
+Python-скрипты для Trino без библиотек, ходят в него по HTTP. Spark-скрипту нужен pyspark, поэтому он запускается внутри контейнера.
+
+## Что где
+
+- `stand/` - `up.sh`, каталоги Trino (`catalog/`) и его память (`conf/`, heap урезан до 2 ГБ)
+- `sql/medallion.sql` - все слои и проверка
+- `scripts/` - замеры, эволюция схемы, Spark
+- `results/` - что у меня получилось. Каждая цифра из отчета отсюда

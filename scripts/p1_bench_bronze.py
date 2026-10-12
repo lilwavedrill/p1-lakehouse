@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
-# Практическая 1, п.5 отчёта: как кодек на Bronze влияет на размер и на время запроса Q16.
-# Пересоздаём Bronze с каждым кодеком и гоняем свой запрос (холодный и тёплый прогон).
+# Практическая 1, п.5 отчёта: как кодек на Bronze влияет на размер, запись и на время запроса Q16.
+# Пересоздаём Bronze с каждым кодеком и гоняем свой запрос по 3 раза холодным и 3 раза тёплым,
+# в отчёт идёт медиана (одиночный замер у меня бывал с выбросами).
+#
+# Запуск: python3 scripts/p1_bench_bronze.py [sf10] [кодеки через запятую]
+# Результат: results/p1_bronze_codecs_sf10.csv
 
+import csv
 import json
+import os
+import statistics
 import subprocess
 import sys
 import time
@@ -10,7 +17,9 @@ import urllib.request
 
 TRINO = "http://localhost:8080"
 SF = sys.argv[1] if len(sys.argv) > 1 else "sf10"
-CODECS = ["GZIP", "ZSTD"]
+CODECS = sys.argv[2].split(",") if len(sys.argv) > 2 else ["NONE", "SNAPPY", "GZIP", "ZSTD"]
+RUNS = 3
+OUT = os.path.join(os.path.dirname(__file__), "..", "results", f"p1_bronze_codecs_{SF}.csv")
 
 
 def run(sql, session=None):
@@ -40,11 +49,36 @@ def wait_trino(timeout=300):
         try:
             with urllib.request.urlopen(TRINO + "/v1/info", timeout=5) as r:
                 if json.load(r).get("starting") is False:
-                    return
+                    break
         except Exception:
             pass
         time.sleep(5)
+    # после рестарта trino какое-то время пишет "No nodes available".
+    # SELECT 1 проходит раньше (ему не нужен воркер), поэтому проверяем запросом по данным
+    while time.time() < deadline:
+        try:
+            run("SELECT count(*) FROM tpch.tiny.nation")
+            return
+        except Exception:
+            time.sleep(3)
     raise RuntimeError("Trino не поднялся")
+
+
+def run_retry(sql, tries=10):
+    for i in range(tries):
+        try:
+            return run(sql)
+        except RuntimeError as e:
+            if "No nodes available" not in str(e) or i == tries - 1:
+                raise
+            time.sleep(3)
+
+
+def cold_restart():
+    # сбрасываем кэш: trino (метаданные) и minio (page cache), как в п.9 гайда 3
+    subprocess.run(["docker", "restart", "trino", "lakehouse-minio"],
+                   capture_output=True, check=False)
+    wait_trino()
 
 
 # Запрос варианта 4 прямо по Bronze - без Silver/Gold, чтобы мерить именно чтение сырого слоя.
@@ -81,23 +115,35 @@ for codec in CODECS:
         total_write += wt
         print(f"  raw_{t}: {mb:.2f} МБ, запись {wt:.2f} с", flush=True)
 
-    # холодный прогон - после сброса кэшей, как в п.9 гайда 3
-    subprocess.run(["docker", "restart", "trino", "lakehouse-minio"],
-                   capture_output=True, check=False)
-    wait_trino()
-    time.sleep(5)
-    rows, cold = run(Q16)
-    _, warm = run(Q16)
-    print(f"  Q16: холодный {cold:.3f} с, тёплый {warm:.3f} с, строк в ответе {len(rows)}",
-          flush=True)
+    colds, warms, nrows = [], [], None
+    for i in range(RUNS):
+        cold_restart()
+        rows, c = run_retry(Q16)
+        _, w = run_retry(Q16)
+        colds.append(c)
+        warms.append(w)
+        nrows = len(rows)
+        print(f"  прогон {i + 1}: холодный {c:.3f} с, повторный {w:.3f} с", flush=True)
 
-    results.append({"кодек": codec, "мб": round(total_mb, 2),
-                    "запись_с": round(total_write, 2),
-                    "cold": round(cold, 3), "warm": round(warm, 3)})
+    r = {"кодек": codec, "размер_мб": round(total_mb, 2), "запись_с": round(total_write, 2),
+         "cold": [round(x, 3) for x in colds], "warm": [round(x, 3) for x in warms],
+         "cold_мед": round(statistics.median(colds), 3),
+         "warm_мед": round(statistics.median(warms), 3), "строк_ответа": nrows}
+    results.append(r)
+    print(f"  медиана: холодный {r['cold_мед']} с, повторный {r['warm_мед']} с, "
+          f"строк в ответе {nrows}", flush=True)
 
-print("\n=== Таблица для п.5 отчёта ===")
-print(f"{'Сжатие на Bronze':18s} {'Размер Bronze, МБ':>18s} {'Запись, с':>11s} "
-      f"{'Q16 холодный, с':>16s} {'Q16 тёплый, с':>14s}")
+with open(OUT, "w", newline="", encoding="utf-8") as f:
+    w = csv.writer(f)
+    w.writerow(["кодек", "размер_bronze_мб", "запись_с",
+                "cold_1", "cold_2", "cold_3", "warm_1", "warm_2", "warm_3",
+                "cold_медиана", "warm_медиана", "строк_в_ответе"])
+    for r in results:
+        w.writerow([r["кодек"], r["размер_мб"], r["запись_с"], *r["cold"], *r["warm"],
+                    r["cold_мед"], r["warm_мед"], r["строк_ответа"]])
+
+print(f"\n=== п.5, медианы из {RUNS} прогонов (записано в {os.path.normpath(OUT)}) ===")
+print(f"{'кодек':8s} {'МБ':>8s} {'запись,с':>9s} {'cold,с':>8s} {'warm,с':>8s}")
 for r in results:
-    print(f"{r['кодек']:18s} {r['мб']:18.2f} {r['запись_с']:11.2f} "
-          f"{r['cold']:16.3f} {r['warm']:14.3f}")
+    print(f"{r['кодек']:8s} {r['размер_мб']:8.2f} {r['запись_с']:9.2f} "
+          f"{r['cold_мед']:8.3f} {r['warm_мед']:8.3f}")

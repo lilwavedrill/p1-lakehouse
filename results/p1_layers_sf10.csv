@@ -1,0 +1,7 @@
+слой,таблица,строк,мб,файлов,кодек,создание_с
+bronze,raw_part,2000000,41.46,3,GZIP,10.12
+bronze,raw_partsupp,8000000,243.37,4,GZIP,24.68
+bronze,raw_supplier,100000,4.91,1,GZIP,2.22
+silver,dim_supplier,100000,0.24,1,ZSTD,0.39
+silver,fct_part_supply,7995520,26.22,4,ZSTD,7.59
+gold,mart_part_suppliers,27840,0.08,1,SNAPPY,1.7

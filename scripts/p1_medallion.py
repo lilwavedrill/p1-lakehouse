@@ -3,9 +3,12 @@
 # Строит медальон Bronze -> Silver -> Gold и собирает цифры для отчёта:
 # строки, вес в МБ, время создания каждой таблицы.
 #
-# Запуск: python3 p1_medallion.py [sf10]
+# Запуск: python3 scripts/p1_medallion.py [sf10]
+# Сводку пишет в results/p1_layers_sf10.csv
 
+import csv
 import json
+import os
 import sys
 import urllib.request
 
@@ -127,3 +130,11 @@ print("-" * len(head))
 for s in stats:
     print(f"{s['слой']:8s} {s['таблица']:22s} {s['строк']:12,d} {s['мб']:9.2f} "
           f"{s['файлов']:7d} {s['кодек']:>7s} {s['сек']:7.2f}")
+
+out = os.path.join(os.path.dirname(__file__), "..", "results", f"p1_layers_{SF}.csv")
+with open(out, "w", newline="", encoding="utf-8") as f:
+    w = csv.writer(f)
+    w.writerow(["слой", "таблица", "строк", "мб", "файлов", "кодек", "создание_с"])
+    for s in stats:
+        w.writerow([s["слой"], s["таблица"], s["строк"], s["мб"], s["файлов"], s["кодек"], s["сек"]])
+print(f"\nзаписано в {os.path.normpath(out)}")
